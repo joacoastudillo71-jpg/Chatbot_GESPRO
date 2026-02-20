@@ -1,0 +1,14 @@
+# Entorno virtual (muy pesado, no se sube)
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Secretos (Railway usará sus propias variables)
+.env
+
+# Archivos temporales del IDE
+.antigravity/
+.vscode/
+.idea/

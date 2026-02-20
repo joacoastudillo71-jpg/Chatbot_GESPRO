@@ -1,0 +1,33 @@
+PRODUCTO: Pijama Luna Satinada
+CATEGORÍA: Pijama
+TELA: Satín
+COLOR: Blanco perla
+PRECIO: $34.99
+TALLAS: S, M, L
+DESCRIPCIÓN: Pijama elegante para novias con botones forrados y ribetes delicados.
+---
+
+PRODUCTO: Conjunto Encanto de Seda
+CATEGORÍA: Lencería
+TELA: Seda natural
+COLOR: Marfil
+PRECIO: $49.99
+TALLAS: S, M
+DESCRIPCIÓN: Lencería fina con encaje francés y tirantes ajustables.
+---
+
+PRODUCTO: Bata Aurora Bridal
+CATEGORÍA: Bata
+TELA: Satín premium
+COLOR: Champagne
+PRECIO: $39.99
+TALLAS: M, L
+DESCRIPCIÓN: Bata larga con mangas amplias y bordado "Bride".
+---
+
+PRODUCTO: Medias Perla
+CATEGORÍA: Medias
+TELA: Nylon suave
+COLOR: Blanco
+PRECIO: $9.99
+DESCRIPCIÓN: Medias delicadas con detalle de encaje superior.
