@@ -1,8 +1,10 @@
+import os
 import json
 import logging
 import asyncio
+import httpx
 from typing import List, Dict
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
@@ -72,6 +74,38 @@ async def process_user_message(agent_state: dict, user_text: str) -> (dict, str)
         ai_response_text = "Disculpa, dame un segundo para revisar eso."
 
     return final_state, ai_response_text
+
+class CreateWebCallRequest(BaseModel):
+    agent_id: str
+
+@app.post("/api/retell/create-web-call")
+async def create_web_call(req: CreateWebCallRequest):
+    retell_api_key = os.environ.get("RETELL_API_KEY")
+    if not retell_api_key:
+        logger.error("RETELL_API_KEY no encontrada en variables de entorno")
+        raise HTTPException(status_code=500, detail="RETELL_API_KEY no configurada en el servidor.")
+        
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "https://api.retellai.com/v2/create-web-call",
+                headers={
+                    "Authorization": f"Bearer {retell_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "agent_id": req.agent_id
+                },
+                timeout=10.0
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Error de API de Retell: {e.response.text}")
+            raise HTTPException(status_code=e.response.status_code, detail=f"Error conectando con Retell: {e.response.text}")
+        except Exception as e:
+            logger.error(f"Error creando web call: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
 async def chat_text(req: ChatRequest):
