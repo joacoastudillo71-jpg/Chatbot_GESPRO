@@ -39,8 +39,13 @@ def consult_knowledge(state: AgentState):
     last_message = messages[-1]
     
     if isinstance(last_message, HumanMessage):
-        query = last_message.content
+        raw_query = last_message.content
         current_context = state.get("current_product_context", {})
+
+        # --- Limpieza del input (Websocket manda historial acumulado) ---
+        import re
+        parts = [p.strip() for p in re.split(r'[.?!]', raw_query) if p.strip()]
+        query = parts[-1] if parts else raw_query
 
         greetings = ["hola", "buenos días", "buenas tardes", "buenas", "qué tal", "hello"]
         if query.lower().strip() in greetings or len(query.split()) <= 2 and "hola" in query.lower():
@@ -49,14 +54,24 @@ def consult_knowledge(state: AgentState):
                 "current_product_context": current_context # Mantenemos el contexto por si acaso
             }
 
+        # --- Detección de Cambio de Tema (Drop the Anchor) ---
+        release_keywords = ["otro", "otra", "diferente", "qué más", "aparte", "tienes pijama", "tienes lencería", "quiero ver"]
+        is_theme_change = any(word in query.lower() for word in release_keywords)
+
+        if is_theme_change:
+            # Lógica de reseteo
+            current_context = {}
+            product_name = None
+        else:
+            product_name = current_context.get("product_name")
+
         # --- FASE 1: Resolución de Pronombres y Slot Filling ---
         implicit_keywords = ["precio", "cuesta", "vale", "talle", "talla", "color", "tela", "material", "descripción", "ese", "esa", "este", "esta", "tienes", "batas", "medias"]
         is_implicit = any(word in query.lower() for word in implicit_keywords)
         
         search_query = query
-        product_name = current_context.get("product_name")
 
-        if is_implicit and product_name:
+        if is_implicit and product_name and not is_theme_change:
             # Simplificamos la query para que el buscador encuentre el producto exacto
             search_query = f"{query} (producto: {product_name})"
 
