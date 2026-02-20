@@ -60,7 +60,7 @@ export default function VoicePanel({ sessionId }: VoicePanelProps) {
                 const response = await fetch(`${backendUrl}/api/retell/create-web-call`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ agent_id: "agent_24a49c23fbe25d8866d933e1ee" }) // Ejemplo de agentId estático (Ajustar)
+                    body: JSON.stringify({ agent_id: "agent_d78b94f1f844fb36ff54ef312c" }) // Ejemplo de agentId estático (Ajustar)
                 });
 
                 if (!response.ok) {
