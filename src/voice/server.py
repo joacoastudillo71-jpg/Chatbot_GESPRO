@@ -150,19 +150,19 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                 # --- TRUCO DE LATENCIA CERO (Filler Words Sin Muletillas) ---
                 # Enviamos un marcador conversacional de inmediato para que la voz empiece a sonar (100ms)
                 # mientras LangGraph procesa por detrás (800ms). Eliminado el "Mmm".
-                if "por favor" in transcript.lower() or "podrías" in transcript.lower() or "quiero" in transcript.lower():
-                    filler_word = "Claro... " 
-                elif any(q in transcript.lower() for q in ["precio", "cuánto", "talla", "stock"]):
-                    filler_word = "Permíteme verificarlo... "
-                else:
-                    filler_word = "Entiendo... "
+                #if "por favor" in transcript.lower() or "podrías" in transcript.lower() or "quiero" in transcript.lower():
+                 #   filler_word = "Claro... " 
+                #elif any(q in transcript.lower() for q in ["precio", "cuánto", "talla", "stock"]):
+                 #   filler_word = "Permíteme verificarlo... "
+                #else:
+                 #   filler_word = "Entiendo... "
                 
-                await websocket.send_text(json.dumps({
-                    "response_id": response_id,
-                    "content": filler_word,
-                    "content_complete": False,
-                    "end_call": False
-                }))
+                #await websocket.send_text(json.dumps({
+                 #   "response_id": response_id,
+                  #  "content": filler_word,
+                   # "content_complete": False,
+                    #"end_call": False
+                #}))
 
                 # Procesamiento real (El RAG)
                 agent_state, ai_response_text = await process_user_message(agent_state, transcript)

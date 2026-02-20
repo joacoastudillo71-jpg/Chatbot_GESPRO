@@ -42,6 +42,13 @@ def consult_knowledge(state: AgentState):
         query = last_message.content
         current_context = state.get("current_product_context", {})
 
+        greetings = ["hola", "buenos días", "buenas tardes", "buenas", "qué tal", "hello"]
+        if query.lower().strip() in greetings or len(query.split()) <= 2 and "hola" in query.lower():
+            return {
+                "messages": [AIMessage(content="¡Hola! Qué gusto saludarte, soy Sofía de Civetta. ¿En qué puedo ayudarte hoy?")],
+                "current_product_context": current_context # Mantenemos el contexto por si acaso
+            }
+
         # --- FASE 1: Resolución de Pronombres y Slot Filling ---
         implicit_keywords = ["precio", "cuesta", "vale", "talle", "talla", "color", "tela", "material", "descripción", "ese", "esa", "este", "esta", "tienes", "batas", "medias"]
         is_implicit = any(word in query.lower() for word in implicit_keywords)
