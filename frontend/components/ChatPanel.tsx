@@ -92,7 +92,7 @@ export default function ChatPanel({ sessionId }: ChatPanelProps) {
                 )}
             </div>
 
-            <div className="mt-6">
+            <div className="mt-6 pb-6 lg:pb-0">
                 <form onSubmit={sendMessage} className="relative flex items-center">
                     <input
                         type="text"
