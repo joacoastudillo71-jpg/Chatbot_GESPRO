@@ -81,11 +81,37 @@ async def consult_knowledge(state: AgentState):
         
         # Manejo seguro por si el RAG devuelve string o diccionario
         if isinstance(rag_result, dict):
-            answer = rag_result.get("answer", "Dame un segundito para verificar eso...")
+            raw_context = rag_result.get("answer", "No se encontró información.")
             new_context = rag_result.get("context", {})
         else:
-            answer = str(rag_result)
+            raw_context = str(rag_result)
             new_context = {}
+
+        # --- FASE 2.5: Generación de Respuesta con LLM (Para que "Sofía" no entregue fragmentos crudos) ---
+        from src.config.llm_factory import LLMFactory
+        from llama_index.core.llms import ChatMessage, MessageRole
+        
+        system_prompt = (
+            "Eres Sofía, una asesora elegante de Civetta. Tu objetivo es ayudar al cliente usando la información proporcionada. "
+            "NUNCA menciones frases como 'Información encontrada' o 'Basado en el catálogo'. Responde de forma natural, cálida y vendedora. "
+            "DEBES usar la información del contexto suministrada para responder, no inventes datos. "
+            "Si encuentras varios productos, menciónalos de forma organizada (usando viñetas o párrafos breves), pero siempre con un tono humano. "
+            "Si el usuario pregunta acerca de un producto en específico, solo habla de dicho producto a menos que pida otro."
+        )
+        
+        user_prompt = f"Pregunta del usuario: {query}\n\n[CONTEXTO:\n{raw_context}\n]"
+        
+        try:
+            llm = LLMFactory.get_llm()
+            chat_messages = [
+                ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
+                ChatMessage(role=MessageRole.USER, content=user_prompt)
+            ]
+            response = await llm.achat(chat_messages)
+            answer = str(response.message.content)
+        except Exception as e:
+            print(f"Error en LLM generador de respuesta: {e}")
+            answer = "Permíteme un momento, estoy verificando esa información para ti..."
 
         # --- FASE 3: Lógica de Persistencia (Anti-Amnesia) ---
         final_context = current_context.copy()

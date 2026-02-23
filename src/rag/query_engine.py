@@ -87,11 +87,7 @@ async def rag_search(query: str, current_product: Optional[str] = None) -> dict:
 
         textos_catalogo = "\n\n".join([row['content'] for row in results])
         
-        # Eliminamos la generacion de LLM local. OpenAI Realtime hablará la respuesta basada en el string
-        # de forma que este backend responde en < 100ms.
-        final_answer = ("Información del catálogo de Civetta encontrada. "
-                        "DEBES usar esta información exacta para responderle al usuario de forma elegante:\n" 
-                        + textos_catalogo)
+        final_answer = textos_catalogo
 
         context = {}
         best_metadata = results[0]['metadata_'] if results else {}
