@@ -1,14 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { RetellWebClient } from "retell-client-js-sdk";
+import React, { useEffect, useState, useRef } from "react";
 import { Phone, PhoneOff, Mic, Loader2, Volume2 } from "lucide-react";
 
 interface VoicePanelProps {
     sessionId: string;
 }
-
-const retellWebClient = new RetellWebClient();
 
 export default function VoicePanel({ sessionId }: VoicePanelProps) {
     const [isCalling, setIsCalling] = useState(false);
@@ -16,70 +13,182 @@ export default function VoicePanel({ sessionId }: VoicePanelProps) {
     const [liveTranscript, setLiveTranscript] = useState<string>("");
     const [agentSpeaking, setAgentSpeaking] = useState(false);
 
+    const pcRef = useRef<RTCPeerConnection | null>(null);
+    const dcRef = useRef<RTCDataChannel | null>(null);
+    const audioElRef = useRef<HTMLAudioElement | null>(null);
+
     useEffect(() => {
-        // Escuchar eventos del SDK de Retell
-        retellWebClient.on("call_started", () => {
-            setCallStatus("ACTIVE");
-            setLiveTranscript("Conexión establecida. Di 'Hola' para comenzar.");
-        });
-
-        retellWebClient.on("call_ended", () => {
-            setCallStatus("IDLE");
-            setIsCalling(false);
-            setLiveTranscript("Llamada finalizada.");
-        });
-
-        retellWebClient.on("agent_start_talking", () => setAgentSpeaking(true));
-        retellWebClient.on("agent_stop_talking", () => setAgentSpeaking(false));
-
-        retellWebClient.on("update", (update) => {
-            if (update.transcript && update.transcript.length > 0) {
-                // Obtenemos solo el contenido del último evento para dar feedback en vivo
-                const latestTranscript = update.transcript[update.transcript.length - 1].content;
-                setLiveTranscript(latestTranscript);
-            }
-        });
+        // Inicializar el elemento de audio
+        const audioEl = new Audio();
+        audioEl.autoplay = true;
+        audioElRef.current = audioEl;
 
         return () => {
-            retellWebClient.removeAllListeners();
+            stopCall();
         };
     }, []);
 
+    const stopCall = () => {
+        if (pcRef.current) {
+            pcRef.current.close();
+            pcRef.current = null;
+        }
+        if (dcRef.current) {
+            dcRef.current.close();
+            dcRef.current = null;
+        }
+        setCallStatus("IDLE");
+        setIsCalling(false);
+        setAgentSpeaking(false);
+        setLiveTranscript("Llamada finalizada.");
+    };
+
     const toggleCall = async () => {
         if (isCalling) {
-            retellWebClient.stopCall();
-            setIsCalling(false);
-        } else {
-            setIsCalling(true);
-            setCallStatus("CONNECTING");
-            try {
-                // Pedimos el web call token al backend de FastAPI
-                const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
-                // Usamos nuestro Agent ID de Retell
-                // En producción idealmente se enviaría también un session_id para unificar la DB
-                const response = await fetch(`${backendUrl}/api/retell/create-web-call`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ agent_id: "agent_d78b94f1f844fb36ff54ef312c" }) // Ejemplo de agentId estático (Ajustar)
-                });
+            stopCall();
+            return;
+        }
 
-                if (!response.ok) {
-                    throw new Error("Error obteniendo el token de llamada web segura.");
+        setIsCalling(true);
+        setCallStatus("CONNECTING");
+        setLiveTranscript("Conectando con OpenAI Realtime...");
+
+        try {
+            // 1. Obtener token efímero del backend
+            const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+            const tokenRes = await fetch(`${backendUrl}/api/realtime-token`);
+            if (!tokenRes.ok) throw new Error("Error obteniendo el token");
+            const tokenData = await tokenRes.json();
+            const EPHEMERAL_KEY = tokenData.client_secret;
+
+            // 2. Crear conexión WebRTC
+            const pc = new RTCPeerConnection();
+            pcRef.current = pc;
+
+            // Escuchar audio del modelo
+            pc.ontrack = (e) => {
+                if (audioElRef.current) {
+                    audioElRef.current.srcObject = e.streams[0];
+                }
+            };
+
+            // 3. Capturar audio local
+            const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+            pc.addTrack(ms.getTracks()[0]);
+
+            // 4. Crear DataChannel para enviar/recibir eventos (Client events + Server events)
+            const dc = pc.createDataChannel("oai-events");
+            dcRef.current = dc;
+
+            dc.addEventListener("open", () => {
+                setCallStatus("ACTIVE");
+                setLiveTranscript("Conexión establecida. Di 'Hola' para comenzar.");
+            });
+
+            dc.addEventListener("message", async (e) => {
+                const event = JSON.parse(e.data);
+
+                // Indicadores visuales de quién habla
+                if (event.type === "response.audio.delta") setAgentSpeaking(true);
+                if (event.type === "response.done") setAgentSpeaking(false);
+
+                // Actualizar la transcripción
+                if (event.type === "conversation.item.input_audio_transcription.completed") {
+                    setLiveTranscript(event.transcript);
+                }
+                if (event.type === "response.audio_transcript.delta") {
+                    setLiveTranscript((prev) => prev + event.delta);
                 }
 
-                const data = await response.json();
+                // --- 5. INTERCEPCIÓN DE FUNCTION CALLING PARA LANGGRAPH ---
+                if (event.type === "response.function_call_arguments.done") {
+                    const callId = event.call_id;
+                    const functionName = event.name;
+                    const args = JSON.parse(event.arguments);
 
-                await retellWebClient.startCall({
-                    accessToken: data.access_token,
-                    sampleRate: 16000,
-                });
+                    if (functionName === "consultar_asesor_langgraph") {
+                        setLiveTranscript("Buscando información de Civetta...");
 
-            } catch (err) {
-                console.error("Error al iniciar llamada:", err);
-                setCallStatus("IDLE");
-                setIsCalling(false);
-                setLiveTranscript("Hubo un error al conectar. Intenta nuevamente.");
+                        try {
+                            // Consultar al backend original (LangGraph)
+                            const chatRes = await fetch(`${backendUrl}/chat`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    message: args.user_query,
+                                    session_id: sessionId || "voz-web-session"
+                                })
+                            });
+
+                            const chatData = await chatRes.json();
+                            const answer = chatData.reply;
+
+                            // Notificar a OpenAI del resultado de la función
+                            const funcResultEvent = {
+                                type: "conversation.item.create",
+                                item: {
+                                    type: "function_call_output",
+                                    call_id: callId,
+                                    output: JSON.stringify({ success: true, answer: answer })
+                                }
+                            };
+                            dc.send(JSON.stringify(funcResultEvent));
+
+                            // Solicitar al modelo que hable la respuesta
+                            const responseCreate = {
+                                type: "response.create"
+                            };
+                            dc.send(JSON.stringify(responseCreate));
+                            setLiveTranscript("Asesora respondiendo...");
+
+                        } catch (err) {
+                            console.error("Error consultando LangGraph", err);
+                            // Notificar error al modelo
+                            dc.send(JSON.stringify({
+                                type: "conversation.item.create",
+                                item: {
+                                    type: "function_call_output",
+                                    call_id: callId,
+                                    output: JSON.stringify({ success: false, error: "Hubo un error interno." })
+                                }
+                            }));
+                            dc.send(JSON.stringify({ type: "response.create" }));
+                        }
+                    }
+                }
+            });
+
+            // 6. Crear Offer y conectar por SDP
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            const baseUrl = "https://api.openai.com/v1/realtime";
+            const model = "gpt-4o-realtime-preview-2024-12-17";
+            const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
+                method: "POST",
+                body: offer.sdp,
+                headers: {
+                    "Authorization": `Bearer ${EPHEMERAL_KEY}`,
+                    "Content-Type": "application/sdp"
+                },
+            });
+
+            if (!sdpResponse.ok) {
+                console.error("SDP fallback failed", await sdpResponse.text());
+                throw new Error("Error en negociación SDP con OpenAI");
             }
+
+            const answer: RTCSessionDescriptionInit = {
+                type: "answer",
+                sdp: await sdpResponse.text()
+            };
+            await pc.setRemoteDescription(answer);
+
+        } catch (err) {
+            console.error("Error al iniciar llamada:", err);
+            setCallStatus("IDLE");
+            setIsCalling(false);
+            setLiveTranscript("Hubo un error al conectar. Verifica tu micrófono o conexión.");
         }
     };
 

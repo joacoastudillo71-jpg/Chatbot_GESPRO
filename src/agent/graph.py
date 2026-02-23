@@ -30,7 +30,7 @@ def check_consent(state: AgentState):
         "messages": [AIMessage(content="Buen día, para continuar, por favor responda 'Acepto' para autorizar el tratamiento de datos.")]
     }
 
-def consult_knowledge(state: AgentState):
+async def consult_knowledge(state: AgentState):
     """Nodo que utiliza RAG para responder preguntas extrayendo datos del catálogo."""
     messages = state.get("messages", [])
     if not messages:
@@ -66,7 +66,7 @@ def consult_knowledge(state: AgentState):
             product_name = current_context.get("product_name")
 
         # --- FASE 1: Resolución de Pronombres y Slot Filling ---
-        implicit_keywords = ["precio", "cuesta", "vale", "talle", "talla", "color", "tela", "material", "descripción", "ese", "esa", "este", "esta", "tienes", "batas", "medias"]
+        implicit_keywords = ["precio", "cuesta", "vale", "talle", "talla", "color", "tela", "material", "descripción", "ese", "esa", "este", "este", "tienes", "batas", "medias"]
         is_implicit = any(word in query.lower() for word in implicit_keywords)
         
         search_query = query
@@ -75,10 +75,9 @@ def consult_knowledge(state: AgentState):
             # Simplificamos la query para que el buscador encuentre el producto exacto
             search_query = f"{query} (producto: {product_name})"
 
-        # --- FASE 2: Búsqueda RAG (LA SOLUCIÓN ESTÁ AQUÍ) ---
-        # Enviamos SOLO la intención de búsqueda pura a la base de datos.
-        # Nuestro archivo query_engine.py ya se encarga de inyectar el prompt y la identidad.
-        rag_result = rag_search(search_query, current_product=product_name)       
+        # --- FASE 2: Búsqueda RAG ASÍNCRONA (LATENCIA < 100MS) ---
+        # Enviamos SOLO la intención de búsqueda pura a la base de datos de manera asíncrona.
+        rag_result = await rag_search(search_query, current_product=product_name)       
         
         # Manejo seguro por si el RAG devuelve string o diccionario
         if isinstance(rag_result, dict):

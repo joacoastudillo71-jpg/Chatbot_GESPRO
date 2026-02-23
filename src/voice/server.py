@@ -51,15 +51,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 interruption_handler = InterruptionHandler()
 
-def extract_text(transcript):
-    """Convierte transcript de Retell a string plano"""
-    if isinstance(transcript, str):
-        return transcript
-    if isinstance(transcript, list):
-        texts = [item["content"] for item in transcript if isinstance(item, dict) and "content" in item]
-        return " ".join(texts)
-    return ""
-
 async def process_user_message(agent_state: dict, user_text: str) -> (dict, str):
     agent_state["messages"].append(HumanMessage(content=user_text))
     
@@ -75,36 +66,65 @@ async def process_user_message(agent_state: dict, user_text: str) -> (dict, str)
 
     return final_state, ai_response_text
 
-class CreateWebCallRequest(BaseModel):
-    agent_id: str
+@app.get("/api/realtime-token")
+async def get_realtime_token():
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_api_key:
+        logger.error("OPENAI_API_KEY no encontrada en variables de entorno")
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY no configurada.")
 
-@app.post("/api/retell/create-web-call")
-async def create_web_call(req: CreateWebCallRequest):
-    retell_api_key = os.environ.get("RETELL_API_KEY")
-    if not retell_api_key:
-        logger.error("RETELL_API_KEY no encontrada en variables de entorno")
-        raise HTTPException(status_code=500, detail="RETELL_API_KEY no configurada en el servidor.")
-        
+    # Instrucciones estrictas para la voz de OpenAI
+    voice_instructions = (
+        CIVETTA_BRIDE_PROMPT + 
+        "\n\nIMPORTANTE Y REGLAS ESTRICTAS DE VOZ:\n"
+        "- Tu voz debe sonar cálida, femenina y 100% como una hablante nativa de Español Latinoamericano.\n"
+        "- NUNCA suenes como una extranjera hablando español. Mantén una prosodia natural latina.\n"
+        "- Usa siempre español.\n"
+        "- Tienes acceso a la herramienta 'consultar_asesor_langgraph'. DEBES llamarla CADA VEZ que el usuario te haga una pregunta sobre productos, bodas, logística, etc. para obtener la respuesta oficial de la base de conocimientos, y luego debes repetir esa respuesta de manera natural conversacional."
+    )
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                "https://api.retellai.com/v2/create-web-call",
+                "https://api.openai.com/v1/realtime/sessions",
                 headers={
-                    "Authorization": f"Bearer {retell_api_key}",
+                    "Authorization": f"Bearer {openai_api_key}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "agent_id": req.agent_id
+                    "model": "gpt-4o-realtime-preview-2024-12-17",
+                    "voice": "shimmer", # shimmer is a warm feminine voice
+                    "instructions": voice_instructions,
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 140 # Barge-in threshold requested: 140ms
+                    },
+                    "tools": [{
+                        "type": "function",
+                        "name": "consultar_asesor_langgraph",
+                        "description": "Llama a esta herramienta cuando necesites buscar información de Civetta, conocer stock, precios, responder sobre bodas o vestidos, o cualquier pregunta del usuario. Nos pasará la respuesta oficial que debes decir.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_query": {"type": "string", "description": "La frase exacta o pregunta que hizo el usuario para consultar en la base de datos."}
+                            },
+                            "required": ["user_query"]
+                        }
+                    }],
+                    "tool_choice": "auto"
                 },
                 timeout=10.0
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            return {"client_secret": data["client_secret"]["value"]}
         except httpx.HTTPStatusError as e:
-            logger.error(f"Error de API de Retell: {e.response.text}")
-            raise HTTPException(status_code=e.response.status_code, detail=f"Error conectando con Retell: {e.response.text}")
+            logger.error(f"Error de API de OpenAI: {e.response.text}")
+            raise HTTPException(status_code=e.response.status_code, detail=f"Error conectando con OpenAI: {e.response.text}")
         except Exception as e:
-            logger.error(f"Error creando web call: {e}")
+            logger.error(f"Error creando sesión realtime: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
@@ -125,113 +145,5 @@ async def chat_text(req: ChatRequest):
 
     return {"reply": ai_response_text}
 
-# ===============================
-# VOZ (RETELL + CARTESIA OPTIMIZADO)
-# ===============================
-@app.websocket("/llm-websocket/{call_id}")
-async def websocket_endpoint(websocket: WebSocket, call_id: str):
-    await manager.connect(websocket)
-    logger.info(f"✅ Connected to call: {call_id} | Voice ID: Cartesia-Sofia | Temp: 0.5")
 
-    agent_state = {
-        "messages": [SystemMessage(content=CIVETTA_BRIDE_PROMPT + "\n\nIMPORTANTE: Tono calmado, humano, usa modismos latinos. Responde en español.")],
-        "lopdp_consent": True,
-        "current_product_context": {}
-    }
-
-    try:
-        while True:
-            raw_data = await websocket.receive_text()
-            event = json.loads(raw_data)
-
-            interaction_type = event.get("interaction_type")
-
-            if interaction_type == "ping_pong":
-                await websocket.send_text(json.dumps({
-                    "interaction_type": "ping_pong",
-                    "timestamp": event.get("timestamp")
-                }))
-                continue
-
-            # --- OPTIMIZACIÓN BARGE-IN (Interrupción < 140ms) ---
-            if interaction_type == "update_only":
-                transcript = extract_text(event.get("transcript", ""))
-                
-                # VAD y filtro semántico (Ignora "ajá", "mm-hmm")
-                if transcript and interruption_handler.should_interrupt(transcript):
-                    logger.info(f"🛑 INTERRUPTION DETECTED: {transcript}")
-                    # Comando NATIVO de Retell para detener audio inmediatamente
-                    await websocket.send_text(json.dumps({
-                        "interaction_type": "clear" 
-                    }))
-                continue
-            # --------------------------------------------
-
-            if interaction_type == "response_required":
-                transcript = extract_text(event.get("transcript", ""))
-                response_id = event.get("response_id")
-                logger.info(f"🗣 User said: {transcript}")
-
-                if not transcript.strip():
-                    await websocket.send_text(json.dumps({
-                        "response_id": response_id,
-                        "content": "¿Hola? ¿Sigues ahí?",
-                        "content_complete": True,
-                        "end_call": False
-                    }))
-                    continue
-
-                # --- TRUCO DE LATENCIA CERO (Filler Words Sin Muletillas) ---
-                # Enviamos un marcador conversacional de inmediato para que la voz empiece a sonar (100ms)
-                # mientras LangGraph procesa por detrás (800ms). Eliminado el "Mmm".
-                #if "por favor" in transcript.lower() or "podrías" in transcript.lower() or "quiero" in transcript.lower():
-                 #   filler_word = "Claro... " 
-                #elif any(q in transcript.lower() for q in ["precio", "cuánto", "talla", "stock"]):
-                 #   filler_word = "Permíteme verificarlo... "
-                #else:
-                 #   filler_word = "Entiendo... "
-                
-                #await websocket.send_text(json.dumps({
-                 #   "response_id": response_id,
-                  #  "content": filler_word,
-                   # "content_complete": False,
-                    #"end_call": False
-                #}))
-
-                # Procesamiento real (El RAG)
-                agent_state, ai_response_text = await process_user_message(agent_state, transcript)
-
-                # STREAMING OPTIMIZADO PARA VOZ (Fragmentación Inteligente)
-                # Separamos por comas y puntos para que Cartesia procese la prosodia correctamente
-                chunks = ai_response_text.replace(",", ",|").replace(".", ".|").split("|")
-                
-                for chunk in chunks:
-                    clean_chunk = chunk.strip()
-                    if not clean_chunk:
-                        continue
-                        
-                    await websocket.send_text(json.dumps({
-                        "response_id": response_id,
-                        "content": clean_chunk + " ",
-                        "content_complete": False,
-                        "end_call": False
-                    }))
-                    # Pequeña pausa asíncrona para no saturar el buffer del socket
-                    await asyncio.sleep(0.01)
-
-                # Finalizar respuesta
-                await websocket.send_text(json.dumps({
-                    "response_id": response_id,
-                    "content": "",
-                    "content_complete": True,
-                    "end_call": False
-                }))
-                logger.info(f"🤖 Sent complete response for id {response_id}")
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info(f"🔌 Call {call_id} disconnected")
-    except Exception as e:
-        logger.error(f"❌ Error in call {call_id}: {e}")
-        manager.disconnect(websocket)
 

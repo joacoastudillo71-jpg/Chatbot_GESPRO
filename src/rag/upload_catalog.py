@@ -1,32 +1,59 @@
+import os
+import re
 from supabase import create_client
 from openai import OpenAI
+from dotenv import load_dotenv
 
-SUPABASE_URL="https://tgpihxyzapnvhcqlaekj.supabase.co"
-SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRncGloeHl6YXBudmhjcWxhZWtqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTM0OTkwMSwiZXhwIjoyMDg2OTI1OTAxfQ.qXdya4bikrZjuQEkkt6m8guBhYIpKkl86Dk3-eZILQA"
+load_dotenv()
 
-OPENAI_API_KEY = "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"
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-with open("catalogo.txt", "r", encoding="utf-8") as f:
-    raw_text = f.read()
+def parse_producto(bloque_texto):
+    """Extrae campos específicos del bloque de texto del catálogo"""
+    nombre = re.search(r"PRODUCTO: (.*)", bloque_texto)
+    categoria = re.search(r"CATEGORÍA: (.*)", bloque_texto)
+    
+    return {
+        "product_name": nombre.group(1).strip() if nombre else "Sin nombre",
+        "category": categoria.group(1).strip() if categoria else "General",
+        "content": bloque_texto.strip()
+    }
 
-productos = raw_text.split("---")
+def ejecutar_ingesta():
+    if not os.path.exists("data/catalogo.txt"):
+        print("❌ No se encontró data/catalogo.txt")
+        return
 
-for producto in productos:
-    producto = producto.strip()
-    if not producto:
-        continue
+    with open("data/catalogo.txt", "r", encoding="utf-8") as f:
+        raw_text = f.read()
 
-    embedding = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=producto
-    ).data[0].embedding
+    # Separamos por los guiones
+    bloques = raw_text.split("---")
 
-    supabase.table("knowledge_base").insert({
-        "content": producto,
-        "embedding": embedding
-    }).execute()
+    for bloque in bloques:
+        if not bloque.strip():
+            continue
 
-    print("✅ Producto cargado")
+        datos = parse_producto(bloque)
+        print(f"📦 Procesando: {datos['product_name']}...")
+
+        # Generar embedding del contenido completo
+        embedding = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=datos['content']
+        ).data[0].embedding
+
+        # Insertar con todas las columnas de tu imagen
+        supabase.table("knowledge_base").insert({
+            "product_name": datos['product_name'],
+            "category": datos['category'],
+            "content": datos['content'],
+            "embedding": embedding
+        }).execute()
+
+    print("✅ ¡Todo el catálogo se ha cargado correctamente en las columnas id, product_name, category, content y embedding!")
+
+if __name__ == "__main__":
+    ejecutar_ingesta()

@@ -1,56 +1,76 @@
 import os
 import re
-import pandas as pd
-from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
-from llama_index.vector_stores.supabase import SupabaseVectorStore
+import asyncio
+from typing import Dict, Optional
+from psycopg_pool import AsyncConnectionPool
+from psycopg.rows import dict_row
 from src.config.settings import settings
-from src.config.llm_factory import LLMFactory
 from src.config.embeddings_factory import EmbeddingsFactory
 
-def check_stock_status(query_text: str) -> str:
-    # ⚠️ AHORA USAMOS UN TOOL O QUERY DIRECTA A LA DB PARA STOCK EN LUGAR DE UN CSV ARCAICO
-    # El sistema debe ser dinámico. Por ahora delegaremos la responsabilidad
-    # al componente que manejará las tools (Phase 4).
-    # Solo dejaremos un placeholder limpio que retorne vacío para no romper la firma.
-    return ""
+# Connection pool global
+pool = None
 
-_index_cache = None
+async def init_pool():
+    global pool
+    if pool is None:
+        pool = AsyncConnectionPool(
+            conninfo=settings.db_connection_string,
+            min_size=1,
+            max_size=5,
+            kwargs={"row_factory": dict_row},
+            open=False
+        )
+        await pool.open()
 
-def get_index():
-    global _index_cache
-    if _index_cache:
-        return _index_cache
+async def get_db_pool() -> AsyncConnectionPool:
+    global pool
+    if pool is None:
+        await init_pool()
+    return pool # type: ignore
 
-    vector_store = SupabaseVectorStore(
-        postgres_connection_string=settings.db_connection_string,
-        collection_name="knowledge_base",
-        schema_name="public"
-    )
-
+async def embed_query_async(query: str) -> list[float]:
+    """Obtiene el embedding de la query usando el factory de forma asíncrona."""
     embed_model = EmbeddingsFactory.get_eval_embed_model()
-    LlamaSettings.llm = LLMFactory.get_llm()
-    LlamaSettings.embed_model = embed_model
+    return await embed_model.aget_text_embedding(query)
 
-    _index_cache = VectorStoreIndex.from_vector_store(
-        vector_store=vector_store,
-        embed_model=embed_model
-    )
-    return _index_cache
+async def search_vectors_sql_async(query_embedding: list[float], limit: int = 3) -> list[Dict]:
+    """Ejecuta pura consulta SQL (Operador Inner Product <#>) para latencia < 5ms."""
+    p = await get_db_pool()
+    async with p.connection() as conn:  # type: ignore
+        from pgvector.psycopg import register_vector_async # type: ignore
+        await register_vector_async(conn)
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT 
+                    id, 
+                    content, 
+                    json_build_object('product_name', product_name, 'category', category) AS metadata_, 
+                    (embedding <#> %s::vector) * -1 AS similarity
+                FROM knowledge_base
+                ORDER BY embedding <#> %s::vector
+                LIMIT %s;
+            """, (query_embedding, query_embedding, limit))
+            res = await cur.fetchall()
+            return res
 
-def rag_search(query: str, current_product: str = None) -> dict:
-    stock_alert = check_stock_status(query)
-    print(f"\n🔍 [RAG] Buscando en DB la consulta: '{query}'")
-
+async def rag_search(query: str, current_product: Optional[str] = None) -> dict:
     try:
-        index = get_index()
-
-        # 🧠 SI EL USUARIO SOLO PREGUNTA PRECIO → NO BUSCAR EN DB
+        search_term = query
         if re.search(r"\b(precio|cu[aá]nto cuesta|valor|costo)\b", query.lower()) and current_product:
-            retriever = index.as_retriever(similarity_top_k=5)
-            nodes = retriever.retrieve(current_product)
+            search_term = current_product
 
-            for n in nodes:
-                text = n.get_content()
+        # Generación de embedding asíncrono
+        query_embedding = await embed_query_async(search_term)
+        
+        limit = 5 if search_term == current_product else 3
+        
+        # Búsqueda SQL directa asíncrona
+        results = await search_vectors_sql_async(query_embedding, limit=limit)
+        
+        # Intentar extraer precio rápido si era la intención
+        if search_term == current_product and current_product and results:
+            for row in results:
+                text = row['content']
                 if current_product.lower() in text.lower():
                     price_match = re.search(r"(?:PRECIO|VALOR|COSTO):\s*([^\n,]+)", text, re.IGNORECASE)
                     if price_match:
@@ -59,43 +79,32 @@ def rag_search(query: str, current_product: str = None) -> dict:
                             "context": {"product_name": current_product, "price": price_match.group(1).strip()}
                         }
 
-        retriever = index.as_retriever(similarity_top_k=3)
-        nodes = retriever.retrieve(query)
+        if not results:
+            return {
+                "answer": "No encontré información exacta en el catálogo de Civetta. Por favor avísale al usuario que consulte con un agente.",
+                "context": {}
+            }
 
-        print(f"📦 [RAG] Documentos encontrados en Supabase: {len(nodes)}")
-
-        if not nodes:
-            llm = LLMFactory.get_llm()
-            fallback = llm.complete(
-                "Eres Sofía, asesora de Civetta. Responde en español de forma natural, gentil y elegante, como una experta en moda y novias."
-                f" El usuario dijo: {query}"
-            )
-            return {"answer": str(fallback).strip(), "context": {}}
-
-        textos_catalogo = "\n\n".join([n.get_content() for n in nodes])
-        print(f"📄 [RAG] Contexto:\n{textos_catalogo}\n")
-
-        llm = LLMFactory.get_llm()
-        prompt_final = (
-            "Eres Sofía, asesora de la marca Civetta.\n"
-            f"El usuario preguntó: '{query}'.\n\n"
-            "Responde SOLO usando esta información extraída dinámicamente de la base de datos:\n"
-            f"{textos_catalogo}\n\n"
-            "Si el usuario pregunta por un producto, descríbelo de manera elegante y humana antes de dar el precio si te lo piden. Nunca inventes productos ni precios que no estén aquí."
-        )
-
-        final_answer = str(llm.complete(prompt_final)).strip()
-
-        if stock_alert:
-            final_answer = f"{stock_alert}\n{final_answer}"
+        textos_catalogo = "\n\n".join([row['content'] for row in results])
+        
+        # Eliminamos la generacion de LLM local. OpenAI Realtime hablará la respuesta basada en el string
+        # de forma que este backend responde en < 100ms.
+        final_answer = ("Información del catálogo de Civetta encontrada. "
+                        "DEBES usar esta información exacta para responderle al usuario de forma elegante:\n" 
+                        + textos_catalogo)
 
         context = {}
-        best_text = nodes[0].get_content() if nodes else ""
+        best_metadata = results[0]['metadata_'] if results else {}
+        
+        # psycopg puede devolver el JSON como string o dict dependiendo del tipeo, aseguramos dict.
+        import json
+        if isinstance(best_metadata, str):
+            best_metadata = json.loads(best_metadata)
+            
+        context["product_name"] = best_metadata.get("product_name", "")
+        context["category"] = best_metadata.get("category", "")
 
-        prod_match = re.search(r"(?:PRODUCTO|NOMBRE|ITEM):\s*([^\n,.-]+)", best_text, re.IGNORECASE)
-        if prod_match:
-            context["product_name"] = prod_match.group(1).strip()
-
+        best_text = results[0]['content'] if results else ""
         price_match = re.search(r"(?:PRECIO|VALOR|COSTO):\s*([^\n,]+)", best_text, re.IGNORECASE)
         if price_match:
             context["price"] = price_match.group(1).strip()
@@ -103,8 +112,9 @@ def rag_search(query: str, current_product: str = None) -> dict:
         return {"answer": final_answer, "context": context}
 
     except Exception as e:
-        print(f"❌ [RAG] Error crítico: {e}")
+        import traceback
+        traceback.print_exc()
         return {
-            "answer": "Dame un segundito, tengo un problema técnico al buscar eso.",
+            "answer": "Hubo un problema técnico interno verificando la disponibilidad.",
             "context": {}
         }

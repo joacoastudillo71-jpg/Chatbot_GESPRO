@@ -22,3 +22,9 @@ create table if not exists event_store (
     payload jsonb,
     created_at timestamp with time zone default timezone('utc'::text, now())
 );
+
+-- OPTIMIZACIÓN ULTRA-BAJA LATENCIA RAG (Producto Interno / HNSW)
+-- Ejecutar en Supabase SQL Editor para crear el índice.
+-- Asegúrate de que la columna embedding tenga la dimensión correcta (ej: 1536 para OpenAI text-embedding-3-small)
+ CREATE INDEX ON knowledge_base USING hnsw (embedding vector_ip_ops);
+
