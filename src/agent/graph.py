@@ -92,7 +92,9 @@ async def consult_knowledge(state: AgentState):
         from llama_index.core.llms import ChatMessage, MessageRole
         
         system_prompt = (
-            "Eres Sofía, una asesora elegante de Civetta. Tu objetivo es ayudar al cliente usando la información proporcionada. "
+            "Eres Sofía de Civetta. Solo debes saludar y presentarte si es el inicio de la conversación o si el usuario te saluda directamente. "
+            "Si la conversación ya está en curso y el usuario hace una pregunta de seguimiento (ej. '¿precio?', '¿tallas?'), responde directamente a la pregunta de forma elegante sin repetir el saludo. "
+            "Revisa el historial de la conversación. Si ya te has presentado anteriormente, no vuelvas a decir tu nombre ni a saludar de nuevo. Mantén la continuidad del diálogo como una conversación humana real. "
             "NUNCA menciones frases como 'Información encontrada' o 'Basado en el catálogo'. Responde de forma natural, cálida y vendedora. "
             "DEBES usar la información del contexto suministrada para responder, no inventes datos. "
             "Si encuentras varios productos, menciónalos de forma organizada (usando viñetas o párrafos breves), pero siempre con un tono humano. "
@@ -104,9 +106,20 @@ async def consult_knowledge(state: AgentState):
         try:
             llm = LLMFactory.get_llm()
             chat_messages = [
-                ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
-                ChatMessage(role=MessageRole.USER, content=user_prompt)
+                ChatMessage(role=MessageRole.SYSTEM, content=system_prompt)
             ]
+            
+            # Incorporar el historial de chat para que Sofía tenga contexto
+            # Tomamos los últimos mensajes relevantes (excluyendo el actual)
+            recent_msgs = messages[-5:-1] if isinstance(messages, list) else []
+            for msg in recent_msgs:
+                if isinstance(msg, HumanMessage):
+                    chat_messages.append(ChatMessage(role=MessageRole.USER, content=msg.content)) # type: ignore
+                elif isinstance(msg, AIMessage):
+                    chat_messages.append(ChatMessage(role=MessageRole.ASSISTANT, content=msg.content)) # type: ignore
+                    
+            chat_messages.append(ChatMessage(role=MessageRole.USER, content=user_prompt))
+            
             response = await llm.achat(chat_messages)
             answer = str(response.message.content)
         except Exception as e:
