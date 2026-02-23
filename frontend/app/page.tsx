@@ -16,8 +16,8 @@ export default function Home() {
       <div className="absolute top-[20%] right-[-10%] w-[30%] h-[30%] bg-fuchsia-500/30 rounded-full mix-blend-multiply filter blur-[128px] opacity-70 animate-blob animation-delay-2000"></div>
       <div className="absolute bottom-[-20%] left-[20%] w-[40%] h-[40%] bg-sky-500/30 rounded-full mix-blend-multiply filter blur-[128px] opacity-70 animate-blob animation-delay-4000"></div>
 
-      <div className="w-full max-w-7xl relative z-10 flex flex-col h-[90vh]">
-        <header className="mb-8 flex items-center justify-between px-6 py-4 bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl shadow-sm">
+      <div className="w-full max-w-7xl relative z-10 flex flex-col h-[90vh] p-2 sm:p-4 lg:p-0">
+        <header className="mb-4 lg:mb-8 flex items-center justify-between px-6 py-4 bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white shadow-lg">
               <Sparkles size={20} />
@@ -33,14 +33,14 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
+        <div className="flex-1 flex flex-col lg:flex-row gap-4 lg:gap-6 min-h-0">
           {/* Panel Izquierdo: Voz */}
-          <section className="h-full min-h-[400px]">
+          <section className="h-[35vh] lg:h-full lg:w-1/2 shrink-0 lg:shrink">
             <VoicePanel sessionId={sessionId} />
           </section>
 
           {/* Panel Derecho: Texto */}
-          <section className="h-full min-h-[400px]">
+          <section className="h-[50vh] lg:h-full lg:w-1/2 flex flex-col shrink-0 lg:shrink">
             <ChatPanel sessionId={sessionId} />
           </section>
         </div>
